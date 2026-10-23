@@ -11,10 +11,14 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Install D-Bus
-        run: sudo apt-get update && sudo apt-get install --yes dbus
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install --yes dbus pkg-config libxkbcommon-dev desktop-file-utils
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install cargo-deb (the package test builds a .deb)
+        run: cargo install cargo-deb --locked
       - name: Check formatting
         run: cargo fmt --check
       - name: Run Clippy
@@ -31,6 +35,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config libxkbcommon-dev
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deb
