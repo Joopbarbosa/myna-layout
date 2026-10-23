@@ -1,0 +1,11 @@
+target/
+*.deb
+.env
+.env.*
+!.env.example
+*.log
+
+# Fora do repositório público (decisão do Gestor, 2026-10-23): só o README é público
+docs-myna-layout/
+CLAUDE.md
+AGENTS.md
