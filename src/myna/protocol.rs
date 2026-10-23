@@ -63,6 +63,28 @@ pub fn check_compatible(properties: &Properties) -> Result<(), String> {
     }
 }
 
+/// The longest text the indicator shows from Myna, in characters.
+pub const MAX_TEXT_CHARS: usize = 160;
+
+/// Make a text published by Myna safe to show: control characters become spaces,
+/// runs of whitespace collapse, the ends are trimmed and the text is cut at
+/// [`MAX_TEXT_CHARS`] characters with an ellipsis (always on a character boundary).
+pub fn sanitize(text: &str) -> String {
+    let cleaned: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.chars().count() <= MAX_TEXT_CHARS {
+        return cleaned;
+    }
+    let mut cut: String = cleaned.chars().take(MAX_TEXT_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
+
 /// Build a reading from the properties. The text is the reason of the error (the
 /// last error if Myna published one, else the status message) or the text of the
 /// notice (the status message); other states carry no text.
@@ -80,7 +102,9 @@ pub fn reading(properties: &Properties) -> MynaReading {
         MynaState::Error => last_error.or(status),
         MynaState::Notice => status,
         _ => None,
-    };
+    }
+    .map(|text| sanitize(&text))
+    .filter(|text| !text.is_empty());
     MynaReading {
         state,
         text,
@@ -176,6 +200,44 @@ mod tests {
         let read = reading(&recording);
         assert_eq!(read.text, None);
         assert!((read.level - 0.12).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hostile_text_is_cleaned_and_cut() {
+        assert_eq!(sanitize("a\nb\tc\u{1b}[31mred"), "a b c [31mred");
+        assert_eq!(sanitize("   \n\r\t  "), "");
+        let huge = "x".repeat(1_000_000);
+        let cut = sanitize(&huge);
+        assert_eq!(cut.chars().count(), MAX_TEXT_CHARS);
+        assert!(cut.ends_with('…'));
+        // A cut in the middle of a multi-byte character must not panic or split it.
+        let accents = "ã".repeat(MAX_TEXT_CHARS + 5);
+        let cut = sanitize(&accents);
+        assert_eq!(cut.chars().count(), MAX_TEXT_CHARS);
+        assert!(cut.starts_with('ã'));
+        assert_eq!(sanitize("short and fine"), "short and fine");
+    }
+
+    #[test]
+    fn hostile_properties_never_produce_unusable_readings() {
+        let mut properties = full("error");
+        properties.last_error = Some("\u{7}\u{0}\n".into());
+        properties.status_message = Some("x".repeat(500_000));
+        let read = reading(&properties);
+        // The last error is only control characters, so it cleans to nothing; the
+        // reading carries no text and the interface falls back to the generic message.
+        assert_eq!(read.text, None);
+        properties.last_error = None;
+        let read = reading(&properties);
+        assert_eq!(
+            read.text.as_deref().map(|t| t.chars().count()),
+            Some(MAX_TEXT_CHARS)
+        );
+        // Non-finite levels pass through unchanged: the core treats them as silence.
+        properties.audio_rms = Some(f64::NAN);
+        assert!(reading(&properties).level.is_nan());
+        properties.audio_rms = Some(f64::INFINITY);
+        assert!(reading(&properties).level.is_infinite());
     }
 
     #[test]

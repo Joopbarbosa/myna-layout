@@ -474,6 +474,8 @@ mod tests {
         assert_eq!(state.effective_level(), 0.0);
         state.reading.level = f32::NAN;
         assert_eq!(state.effective_level(), 0.0);
+        state.reading.level = f32::INFINITY;
+        assert_eq!(state.effective_level(), 0.0);
     }
 
     #[test]
