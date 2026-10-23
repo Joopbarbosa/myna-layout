@@ -11,6 +11,10 @@ pub enum Surface {
     Notification,
 }
 
+/// Where a module reports [`Event`] values to: the composition root turns it into a
+/// message to the event loop.
+pub type EventSink = Box<dyn Fn(Event) + Send>;
+
 /// An input of the state function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {

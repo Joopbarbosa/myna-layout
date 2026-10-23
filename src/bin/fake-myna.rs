@@ -117,17 +117,10 @@ impl Control {
         level: f64,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> zbus::fdo::Result<()> {
-        let valid = [
-            "idle",
-            "loading",
-            "recording",
-            "transcribing",
-            "finalizing",
-            "notice",
-            "error",
-        ];
-        if !valid.contains(&state.as_str()) {
-            return Err(zbus::fdo::Error::InvalidArgs("unknown state".into()));
+        // Any non-empty name is accepted on purpose: tests need to publish a state the
+        // indicator does not know (RN-NOVA-1).
+        if state.is_empty() {
+            return Err(zbus::fdo::Error::InvalidArgs("empty state".into()));
         }
         {
             let mut s = self.0.lock().unwrap();

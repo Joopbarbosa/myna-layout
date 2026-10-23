@@ -37,11 +37,7 @@ use smithay_client_toolkit::{
 pub use placement::{Placement, placement};
 pub use render::{BarView, PlainRenderer, Renderer};
 
-use crate::core::{Bar, BarLook, Config, Event, Surface};
-
-/// Where the surface reports events: the composition root turns it into a message
-/// to the event loop.
-pub type EventSink = Box<dyn Fn(Event) + Send>;
+use crate::core::{Bar, BarLook, Config, Event, EventSink, Surface};
 
 /// Why the bar could not connect to the compositor.
 #[derive(Debug)]

@@ -25,7 +25,7 @@ mod state;
 pub use command::{BarKind, BarLook, Command, OneTimeNotice, Urgency};
 pub use config::{Config, HorizontalAnchor, Mode, Position, Size, VerticalAnchor};
 pub use decide::{State, decide};
-pub use event::{Event, Surface};
+pub use event::{Event, EventSink, Surface};
 pub use message::Message;
 pub use ports::{Bar, MynaClient, Notifier};
 pub use state::{MynaReading, MynaState};

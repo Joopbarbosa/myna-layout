@@ -16,6 +16,8 @@ name = "myna-layout"
 path = "src/main.rs"
 
 [dependencies]
+async-channel = "2.5.0"
+futures-lite = "2.6.1"
 serde = { version = "1.0.229", features = ["derive"] }
 smithay-client-toolkit = "0.21.1"
 tiny-skia = "0.12.0"
