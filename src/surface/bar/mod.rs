@@ -90,13 +90,23 @@ pub struct BarState {
     shm: Shm,
     pool: SlotPool,
     renderer: Box<dyn Renderer>,
-    layer: Option<LayerSurface>,
-    configured_size: Option<(u32, u32)>,
+    started: bool,
+    panels: Vec<Panel>,
     ready_reported: bool,
     wanted: Option<BarView>,
     level: f32,
-    mapped: bool,
     shown_at: Option<Instant>,
+}
+
+/// The bar on one monitor. Every monitor gets its own, so the bar shows wherever
+/// the user is looking (RN-NOVA-16).
+struct Panel {
+    /// `None` only for the fallback panel, when no monitor is known yet and the
+    /// compositor picks one.
+    output: Option<wl_output::WlOutput>,
+    layer: LayerSurface,
+    configured_size: Option<(u32, u32)>,
+    mapped: bool,
     frame_pending: bool,
 }
 
@@ -134,14 +144,12 @@ impl BarState {
                 config.reduced_motion,
                 Language::from_env(),
             )),
-            layer: None,
-            configured_size: None,
+            started: false,
+            panels: Vec::new(),
             ready_reported: false,
             wanted: None,
             level: 0.0,
-            mapped: false,
             shown_at: None,
-            frame_pending: false,
         };
         Ok(Connected {
             state,
@@ -155,32 +163,92 @@ impl BarState {
         self.renderer = renderer;
     }
 
-    fn size(&self) -> (u32, u32) {
-        match self.configured_size {
+    fn size_of(&self, panel: &Panel) -> (u32, u32) {
+        match panel.configured_size {
             Some((width, height)) if width > 0 && height > 0 => (width, height),
             _ => (self.config.size.width, self.config.size.height),
         }
     }
 
-    /// Draw what is wanted and attach it, or detach the buffer when nothing is
-    /// wanted, so the surface disappears (RN-NOVA-13).
-    fn present(&mut self) {
-        let Some(layer) = self.layer.clone() else {
+    /// Create the layer surface for one monitor (or for the compositor's choice).
+    /// `None` means the surface could not be set up.
+    fn create_panel(&mut self, output: Option<wl_output::WlOutput>) -> Option<Panel> {
+        let surface = self.compositor.create_surface(&self.queue_handle);
+        let layer = self.layer_shell.create_layer_surface(
+            &self.queue_handle,
+            surface,
+            Layer::Overlay,
+            Some("myna-layout"),
+            output.as_ref(),
+        );
+        let placed = placement(&self.config.position);
+        layer.set_anchor(placed.anchor);
+        let (top, right, bottom, left) = placed.margin;
+        layer.set_margin(top, right, bottom, left);
+        layer.set_size(self.config.size.width, self.config.size.height);
+        layer.set_exclusive_zone(0);
+        // Never take keyboard focus: Myna types into the focused field (RN-NOVA-12).
+        layer.set_keyboard_interactivity(KEYBOARD_INTERACTIVITY);
+        // Let clicks through: an empty input region.
+        match Region::new(&self.compositor) {
+            Ok(region) => layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region())),
+            Err(error) => {
+                tracing::warn!(%error, "could not create the empty input region");
+                return None;
+            }
+        }
+        layer.commit();
+        Some(Panel {
+            output,
+            layer,
+            configured_size: None,
+            mapped: false,
+            frame_pending: false,
+        })
+    }
+
+    /// Open the bar on a monitor, unless it already has one.
+    fn add_output(&mut self, output: wl_output::WlOutput) {
+        // The fallback panel (compositor's choice) gives way to real monitors.
+        self.panels.retain(|panel| panel.output.is_some());
+        if self
+            .panels
+            .iter()
+            .any(|panel| panel.output.as_ref() == Some(&output))
+        {
             return;
-        };
-        if self.configured_size.is_none() {
+        }
+        match self.create_panel(Some(output)) {
+            Some(panel) => self.panels.push(panel),
+            None => (self.sink)(Event::SurfaceFailed(Surface::Bar)),
+        }
+    }
+
+    /// Draw what is wanted on every monitor and attach it, or detach the buffers when
+    /// nothing is wanted, so the bar disappears (RN-NOVA-13).
+    fn present(&mut self) {
+        for index in 0..self.panels.len() {
+            self.present_panel(index);
+        }
+    }
+
+    fn present_panel(&mut self, index: usize) {
+        let layer = self.panels[index].layer.clone();
+        if self.panels[index].configured_size.is_none() {
             return;
         }
         let Some(mut view) = self.wanted.clone() else {
-            if self.mapped {
+            if self.panels[index].mapped {
                 layer.wl_surface().attach(None, 0, 0);
                 layer.commit();
-                self.mapped = false;
+                self.panels[index].mapped = false;
             }
             return;
         };
         view.elapsed = self.shown_at.map(|at| at.elapsed()).unwrap_or_default();
-        let (width, height) = self.size();
+        let (width, height) = self.size_of(&self.panels[index]);
         let stride = width as i32 * 4;
         let Ok((buffer, canvas)) = self.pool.create_buffer(
             width as i32,
@@ -202,15 +270,25 @@ impl BarState {
             return;
         }
         // Ask for the next frame so the animation keeps going while the bar is shown.
-        if !self.frame_pending {
-            self.frame_pending = true;
+        if !self.panels[index].frame_pending {
+            self.panels[index].frame_pending = true;
             layer.wl_surface().frame(
                 &self.queue_handle,
                 FrameCallbackData(layer.wl_surface().clone()),
             );
         }
         layer.commit();
-        self.mapped = true;
+        self.panels[index].mapped = true;
+    }
+
+    fn panel_of_layer(&self, layer: &LayerSurface) -> Option<usize> {
+        self.panels.iter().position(|panel| &panel.layer == layer)
+    }
+
+    fn panel_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
+        self.panels
+            .iter()
+            .position(|panel| panel.layer.wl_surface() == surface)
     }
 }
 
@@ -219,38 +297,22 @@ const KEYBOARD_INTERACTIVITY: KeyboardInteractivity = KeyboardInteractivity::Non
 
 impl Bar for BarState {
     fn start(&mut self) {
-        if self.layer.is_some() {
+        if self.started {
             return;
         }
-        let surface = self.compositor.create_surface(&self.queue_handle);
-        let layer = self.layer_shell.create_layer_surface(
-            &self.queue_handle,
-            surface,
-            Layer::Overlay,
-            Some("myna-layout"),
-            None,
-        );
-        let placed = placement(&self.config.position);
-        layer.set_anchor(placed.anchor);
-        let (top, right, bottom, left) = placed.margin;
-        layer.set_margin(top, right, bottom, left);
-        layer.set_size(self.config.size.width, self.config.size.height);
-        layer.set_exclusive_zone(0);
-        // Never take keyboard focus: Myna types into the focused field (RN-NOVA-12).
-        layer.set_keyboard_interactivity(KEYBOARD_INTERACTIVITY);
-        // Let clicks through: an empty input region.
-        match Region::new(&self.compositor) {
-            Ok(region) => layer
-                .wl_surface()
-                .set_input_region(Some(region.wl_region())),
-            Err(error) => {
-                tracing::warn!(%error, "could not create the empty input region");
-                (self.sink)(Event::SurfaceFailed(Surface::Bar));
-                return;
+        self.started = true;
+        let outputs: Vec<_> = self.output_state.outputs().collect();
+        if outputs.is_empty() {
+            // No monitor is known yet: let the compositor pick until one is announced.
+            match self.create_panel(None) {
+                Some(panel) => self.panels.push(panel),
+                None => (self.sink)(Event::SurfaceFailed(Surface::Bar)),
             }
+            return;
         }
-        layer.commit();
-        self.layer = Some(layer);
+        for output in outputs {
+            self.add_output(output);
+        }
     }
 
     fn show(&mut self, look: &BarLook) {
@@ -283,29 +345,34 @@ impl Bar for BarState {
 }
 
 impl LayerShellHandler for BarState {
-    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &LayerSurface) {
-        tracing::warn!("the compositor closed the bar surface");
-        self.layer = None;
-        self.mapped = false;
-        self.configured_size = None;
-        self.ready_reported = false;
-        (self.sink)(Event::SurfaceFailed(Surface::Bar));
+    fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
+        tracing::warn!("the compositor closed a bar surface");
+        if let Some(index) = self.panel_of_layer(layer) {
+            self.panels.remove(index);
+        }
+        if self.panels.is_empty() {
+            self.started = false;
+            self.ready_reported = false;
+            (self.sink)(Event::SurfaceFailed(Surface::Bar));
+        }
     }
 
     fn configure(
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _: u32,
     ) {
-        self.configured_size = Some(configure.new_size);
-        if !self.ready_reported {
-            self.ready_reported = true;
-            (self.sink)(Event::SurfaceReady(Surface::Bar));
+        if let Some(index) = self.panel_of_layer(layer) {
+            self.panels[index].configured_size = Some(configure.new_size);
+            if !self.ready_reported {
+                self.ready_reported = true;
+                (self.sink)(Event::SurfaceReady(Surface::Bar));
+            }
+            self.present_panel(index);
         }
-        self.present();
     }
 }
 
@@ -326,10 +393,18 @@ impl CompositorHandler for BarState {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
-        self.frame_pending = false;
-        if self.wanted.is_some() {
-            self.present();
+    fn frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if let Some(index) = self.panel_of_surface(surface) {
+            self.panels[index].frame_pending = false;
+            if self.wanted.is_some() {
+                self.present_panel(index);
+            }
         }
     }
     fn surface_enter(
@@ -354,9 +429,21 @@ impl OutputHandler for BarState {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
+        if self.started {
+            self.add_output(output);
+        }
+    }
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        output: wl_output::WlOutput,
+    ) {
+        self.panels
+            .retain(|panel| panel.output.as_ref() != Some(&output));
+    }
 }
 
 impl ShmHandler for BarState {
