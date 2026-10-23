@@ -25,6 +25,8 @@ sudo apt install ./myna-layout_<version>_amd64.deb
 
 The indicator service starts automatically when you log in.
 
+Or, in one command, with a clone of this repository: `./scripts/install.sh` installs the latest release package, and `./scripts/install.sh --source` builds it from the checkout first (needs Rust).
+
 ## Remove
 
 Remove the application while keeping its configuration:
@@ -122,6 +124,8 @@ sudo apt install ./myna-layout_<versão>_amd64.deb
 ```
 
 O serviço do indicador inicia automaticamente quando você entra na sessão.
+
+Ou em um só comando, com um clone deste repositório: `./scripts/install.sh` instala o pacote da última release, e `./scripts/install.sh --source` gera o pacote a partir do código antes (exige Rust).
 
 ## Remoção
 
