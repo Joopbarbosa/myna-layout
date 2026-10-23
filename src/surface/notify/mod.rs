@@ -166,7 +166,6 @@ async fn worker(
                 if current_id != 0 {
                     if let Err(error) = close_id(&connection, current_id).await {
                         tracing::warn!(%error, "notification close failed");
-                        sink(Event::SurfaceFailed(Surface::Notification));
                     }
                     current_id = 0;
                 }

@@ -28,6 +28,8 @@ struct MockNotifications {
     calls: Arc<Mutex<Vec<Call>>>,
     closed: Arc<Mutex<Vec<u32>>>,
     next_id: Arc<Mutex<u32>>,
+    honor_replaces_id: bool,
+    fail_close: bool,
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
@@ -63,7 +65,7 @@ impl MockNotifications {
             transient,
         });
         let mut next_id = self.next_id.lock().unwrap();
-        if replaces_id != 0 {
+        if self.honor_replaces_id && replaces_id != 0 {
             replaces_id
         } else {
             *next_id += 1;
@@ -71,21 +73,29 @@ impl MockNotifications {
         }
     }
 
-    fn close_notification(&self, id: u32) {
+    fn close_notification(&self, id: u32) -> zbus::fdo::Result<()> {
         self.closed.lock().unwrap().push(id);
+        if self.fail_close {
+            Err(zbus::fdo::Error::Failed("configured close failure".into()))
+        } else {
+            Ok(())
+        }
     }
 }
 
 struct PrivateNotifications {
     address: String,
     daemon: Child,
-    _service: zbus::Connection,
+    _service: Option<zbus::Connection>,
     calls: Arc<Mutex<Vec<Call>>>,
     closed: Arc<Mutex<Vec<u32>>>,
 }
 
 impl PrivateNotifications {
     fn start() -> Self {
+        Self::configured(true, true, false)
+    }
+    fn configured(with_service: bool, honor_replaces_id: bool, fail_close: bool) -> Self {
         let mut daemon = Command::new("dbus-daemon")
             .args(["--session", "--nofork", "--print-address=1"])
             .stdout(Stdio::piped())
@@ -101,14 +111,18 @@ impl PrivateNotifications {
             calls: Arc::clone(&calls),
             closed: Arc::clone(&closed),
             next_id: Arc::default(),
+            honor_replaces_id,
+            fail_close,
         };
-        let service = zbus::block_on(
-            zbus::connection::Builder::address(address.trim())
-                .name("org.freedesktop.Notifications")
-                .serve_at("/org/freedesktop/Notifications", mock)
-                .build(),
-        )
-        .expect("mock notification service");
+        let service = with_service.then(|| {
+            zbus::block_on(
+                zbus::connection::Builder::address(address.trim())
+                    .name("org.freedesktop.Notifications")
+                    .serve_at("/org/freedesktop/Notifications", mock)
+                    .build(),
+            )
+            .expect("mock notification service")
+        });
         Self {
             address: address.trim().to_owned(),
             daemon,
@@ -166,8 +180,83 @@ fn start_reports_ready_and_show_sends_translated_message_and_urgency() {
     let calls = bus.calls.lock().unwrap();
     assert_eq!(calls[0].summary, "Listening");
     assert_eq!(calls[0].urgency, 2);
+    assert!(!calls.iter().any(|call| call.urgency == 0));
     assert!(calls[0].transient);
     assert_eq!(calls[0].replaces_id, 0);
+}
+
+#[test]
+fn start_reports_failure_without_notification_service() {
+    let bus = PrivateNotifications::configured(false, true, false);
+    let (mut notifier, events) = notifier(&bus);
+    notifier.start();
+    wait_for("notification surface failure", || {
+        events
+            .lock()
+            .unwrap()
+            .contains(&Event::SurfaceFailed(Surface::Notification))
+    });
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .contains(&Event::SurfaceReady(Surface::Notification))
+    );
+}
+
+#[test]
+fn repeated_shows_replace_without_closing_when_server_honors_id() {
+    let bus = PrivateNotifications::start();
+    let (mut notifier, _) = notifier(&bus);
+    for _ in 0..3 {
+        notifier.show(&Message::Listening, Urgency::Normal);
+    }
+    wait_for("three notification calls", || {
+        bus.calls.lock().unwrap().len() == 3
+    });
+    notifier.flush(Duration::from_secs(2));
+    assert!(bus.closed.lock().unwrap().is_empty());
+    assert_eq!(
+        bus.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.urgency)
+            .collect::<Vec<_>>(),
+        vec![1, 1, 1]
+    );
+}
+
+#[test]
+fn repeated_shows_close_old_ids_when_server_ignores_id() {
+    let bus = PrivateNotifications::configured(true, false, false);
+    let (mut notifier, _) = notifier(&bus);
+    for _ in 0..3 {
+        notifier.show(&Message::Listening, Urgency::Normal);
+    }
+    wait_for("three notification calls", || {
+        bus.calls.lock().unwrap().len() == 3
+    });
+    notifier.flush(Duration::from_secs(2));
+    assert_eq!(*bus.closed.lock().unwrap(), vec![1, 2]);
+}
+
+#[test]
+fn close_failure_does_not_fail_notification_surface() {
+    let bus = PrivateNotifications::configured(true, true, true);
+    let (mut notifier, events) = notifier(&bus);
+    notifier.show(&Message::Listening, Urgency::Normal);
+    wait_for("notification call", || {
+        !bus.calls.lock().unwrap().is_empty()
+    });
+    notifier.close();
+    notifier.flush(Duration::from_secs(2));
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .contains(&Event::SurfaceFailed(Surface::Notification))
+    );
 }
 
 #[test]

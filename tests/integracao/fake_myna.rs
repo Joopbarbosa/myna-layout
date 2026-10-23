@@ -5,7 +5,7 @@ use std::{
     io::{BufRead, BufReader},
     process::{Child, Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
@@ -127,6 +127,13 @@ impl FakeMyna {
     fn property(&self, interface: &str, name: &str) -> Result<String, Box<dyn std::error::Error>> {
         self.call("org.freedesktop.DBus.Properties", "Get", &[interface, name])
     }
+    fn wait_until(&self, what: &str, condition: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !condition() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
     /// Sets the simulated Myna state.
     pub fn set_state(
         &self,
@@ -212,6 +219,11 @@ mod tests {
     fn registration_is_idempotent_and_suppresses_toasts() {
         let fake = FakeMyna::start()
             .expect("private dbus-daemon must start for fake-myna integration tests");
+        assert!(
+            fake.property(CONTROL, "ToastSuppressed")
+                .unwrap()
+                .contains("false")
+        );
         let client = TestClient::register(fake.bus_address()).unwrap();
         let proxy = block_on(zbus::Proxy::new(&client.connection, SERVICE, PATH, SERVICE)).unwrap();
         let _: u32 = block_on(proxy.call("RegisterClient", &())).unwrap();
@@ -221,6 +233,12 @@ mod tests {
                 .unwrap()
                 .contains("true")
         );
+        drop(proxy);
+        drop(client);
+        fake.wait_until("toast suppression reset", || {
+            fake.property(CONTROL, "ToastSuppressed")
+                .is_ok_and(|value| value.contains("false"))
+        });
     }
     #[test]
     fn registration_clears_after_client_disconnect() {
@@ -243,10 +261,11 @@ mod tests {
             .expect("private dbus-daemon must start for fake-myna integration tests");
         let _client = TestClient::register(fake.bus_address()).unwrap();
         fake.restart().unwrap();
-        assert_eq!(fake.registered_clients().unwrap(), 0);
-        assert!(
-            fake.property(SERVICE, "State").is_ok(),
-            "service name was not reacquired"
-        );
+        fake.wait_until("restart state and name", || {
+            fake.registered_clients().is_ok_and(|clients| clients == 0)
+                && fake
+                    .property(SERVICE, "State")
+                    .is_ok_and(|state| state.contains("idle"))
+        });
     }
 }
