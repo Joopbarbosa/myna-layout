@@ -13,6 +13,8 @@ pub struct BarView {
     pub level: f32,
     /// Overall opacity from 0 to 1.
     pub opacity: f32,
+    /// Time since the bar was shown, for the animation.
+    pub elapsed: std::time::Duration,
 }
 
 /// Draws one frame into an ARGB (premultiplied, little endian) canvas.
@@ -73,6 +75,7 @@ mod tests {
             },
             level: 0.0,
             opacity,
+            elapsed: std::time::Duration::ZERO,
         }
     }
 

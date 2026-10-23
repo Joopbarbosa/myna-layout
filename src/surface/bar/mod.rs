@@ -10,8 +10,10 @@
 
 mod placement;
 mod render;
+mod text;
+mod wave;
 
-use std::fmt;
+use std::{fmt, time::Instant};
 
 use smithay_client_toolkit::reexports::client::{
     Connection, EventQueue, QueueHandle,
@@ -19,7 +21,7 @@ use smithay_client_toolkit::reexports::client::{
     protocol::{wl_output, wl_shm, wl_surface},
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, Region},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -36,8 +38,12 @@ use smithay_client_toolkit::{
 
 pub use placement::{Placement, placement};
 pub use render::{BarView, PlainRenderer, Renderer};
+pub use wave::WaveRenderer;
 
-use crate::core::{Bar, BarLook, Config, Event, EventSink, Surface};
+use crate::{
+    core::{Bar, BarLook, Config, Event, EventSink, Surface},
+    i18n::Language,
+};
 
 /// Why the bar could not connect to the compositor.
 #[derive(Debug)]
@@ -90,6 +96,8 @@ pub struct BarState {
     wanted: Option<BarView>,
     level: f32,
     mapped: bool,
+    shown_at: Option<Instant>,
+    frame_pending: bool,
 }
 
 impl BarState {
@@ -122,13 +130,18 @@ impl BarState {
             layer_shell,
             shm,
             pool,
-            renderer: Box::new(PlainRenderer),
+            renderer: Box::new(WaveRenderer::new(
+                config.reduced_motion,
+                Language::from_env(),
+            )),
             layer: None,
             configured_size: None,
             ready_reported: false,
             wanted: None,
             level: 0.0,
             mapped: false,
+            shown_at: None,
+            frame_pending: false,
         };
         Ok(Connected {
             state,
@@ -158,7 +171,7 @@ impl BarState {
         if self.configured_size.is_none() {
             return;
         }
-        let Some(view) = self.wanted.clone() else {
+        let Some(mut view) = self.wanted.clone() else {
             if self.mapped {
                 layer.wl_surface().attach(None, 0, 0);
                 layer.commit();
@@ -166,6 +179,7 @@ impl BarState {
             }
             return;
         };
+        view.elapsed = self.shown_at.map(|at| at.elapsed()).unwrap_or_default();
         let (width, height) = self.size();
         let stride = width as i32 * 4;
         let Ok((buffer, canvas)) = self.pool.create_buffer(
@@ -186,6 +200,14 @@ impl BarState {
             tracing::warn!("could not attach the bar buffer");
             (self.sink)(Event::SurfaceFailed(Surface::Bar));
             return;
+        }
+        // Ask for the next frame so the animation keeps going while the bar is shown.
+        if !self.frame_pending {
+            self.frame_pending = true;
+            layer.wl_surface().frame(
+                &self.queue_handle,
+                FrameCallbackData(layer.wl_surface().clone()),
+            );
         }
         layer.commit();
         self.mapped = true;
@@ -229,24 +251,30 @@ impl Bar for BarState {
     }
 
     fn show(&mut self, look: &BarLook) {
+        if self.wanted.is_none() {
+            self.shown_at = Some(Instant::now());
+        }
         self.wanted = Some(BarView {
             look: look.clone(),
             level: self.level,
             opacity: self.config.opacity,
+            elapsed: Default::default(),
         });
         self.present();
     }
 
     fn update_level(&mut self, level: f32) {
+        // Only record the level: the next frame draws it, so a burst of readings does
+        // not cost a buffer each.
         self.level = level;
         if let Some(view) = self.wanted.as_mut() {
             view.level = level;
-            self.present();
         }
     }
 
     fn hide(&mut self) {
         self.wanted = None;
+        self.shown_at = None;
         self.present();
     }
 }
@@ -295,7 +323,12 @@ impl CompositorHandler for BarState {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {}
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.frame_pending = false;
+        if self.wanted.is_some() {
+            self.present();
+        }
+    }
     fn surface_enter(
         &mut self,
         _: &Connection,
