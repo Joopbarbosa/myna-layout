@@ -1,7 +1,7 @@
 //! The client: one worker thread owns the D-Bus connection and turns what happens on
 //! the bus into events.
 
-use std::{collections::HashMap, fmt, thread};
+use std::{collections::HashMap, fmt, thread, time::Duration};
 
 use futures_lite::{StreamExt, future};
 use zbus::{
@@ -151,7 +151,13 @@ async fn watch(
                 merge(&mut cache, &changes);
                 sink(Event::Myna(protocol::reading(&cache)));
             }
-            Input::Changed(None) => properties_stream = None,
+            Input::Changed(None) => {
+                // The signal stream ended while Myna is still on the bus: read it again
+                // and resume watching instead of going deaf (a short pause avoids a busy loop).
+                tracing::warn!("the Myna property stream ended; observing Myna again");
+                thread::sleep(Duration::from_millis(250));
+                properties_stream = attach(&connection, &sink, &mut cache).await;
+            }
         }
     }
 }
@@ -203,7 +209,8 @@ async fn attach(
 async fn next_changes(stream: &mut PropertiesChangedStream) -> Option<HashMap<String, Value>> {
     loop {
         let signal = stream.next().await?;
-        let args = signal.args().ok()?;
+        // A malformed signal is skipped; only the end of the stream stops the watching.
+        let Ok(args) = signal.args() else { continue };
         if args.interface_name().as_str() != INTERFACE {
             continue;
         }
