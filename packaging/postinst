@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+
+systemctl --global enable myna-layout.service >/dev/null 2>&1 || true
+
+for session in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+    user=$(loginctl show-session "$session" -p Name --value 2>/dev/null) || continue
+    type=$(loginctl show-session "$session" -p Type --value 2>/dev/null) || continue
+    [ -n "$user" ] && [ "$type" = wayland ] || continue
+    systemctl --user --machine="${user}@.host" start myna-layout.service >/dev/null 2>&1 || true
+done
+
+exit 0
