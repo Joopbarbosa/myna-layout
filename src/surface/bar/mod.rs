@@ -214,6 +214,9 @@ impl BarState {
     }
 }
 
+/// The bar never asks for keyboard focus (RN-NOVA-12).
+const KEYBOARD_INTERACTIVITY: KeyboardInteractivity = KeyboardInteractivity::None;
+
 impl Bar for BarState {
     fn start(&mut self) {
         if self.layer.is_some() {
@@ -234,7 +237,7 @@ impl Bar for BarState {
         layer.set_size(self.config.size.width, self.config.size.height);
         layer.set_exclusive_zone(0);
         // Never take keyboard focus: Myna types into the focused field (RN-NOVA-12).
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_keyboard_interactivity(KEYBOARD_INTERACTIVITY);
         // Let clicks through: an empty input region.
         match Region::new(&self.compositor) {
             Ok(region) => layer
@@ -370,4 +373,14 @@ impl ProvidesRegistryState for BarState {
         &mut self.registry_state
     }
     registry_handlers![OutputState];
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn cen_novo_15_the_bar_never_asks_for_keyboard_focus() {
+        assert_eq!(KEYBOARD_INTERACTIVITY, KeyboardInteractivity::None);
+    }
 }

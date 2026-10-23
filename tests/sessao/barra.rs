@@ -55,6 +55,12 @@ fn cen_novo_15_the_bar_shows_without_taking_the_focus_and_cen_novo_16_goes_away(
         message: Some(Message::Listening),
     });
     println!("The bar is up for 15 s: click into a text field elsewhere and type or dictate.");
+    println!(
+        "MANUAL CHECK (CEN-NOVO-15): the field keeps focus, the click goes through the bar, the text arrives."
+    );
+    println!(
+        "The contract is asserted by bar::focus_tests; only the compositor outcome is judged by the tester."
+    );
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(15) {
         let seconds = start.elapsed().as_secs_f32();
