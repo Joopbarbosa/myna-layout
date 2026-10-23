@@ -1,0 +1,12 @@
+[Unit]
+Description=Myna Layout session indicator
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/myna-layout
+Restart=on-failure
+Slice=app.slice
+
+[Install]
+WantedBy=graphical-session.target

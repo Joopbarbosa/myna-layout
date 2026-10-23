@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = remove ]; then
+    for session in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+        user=$(loginctl show-session "$session" -p Name --value 2>/dev/null) || continue
+        type=$(loginctl show-session "$session" -p Type --value 2>/dev/null) || continue
+        [ -n "$user" ] && [ "$type" = wayland ] || continue
+        systemctl --user --machine="${user}@.host" stop myna-layout.service >/dev/null 2>&1 || true
+    done
+    systemctl --global disable myna-layout.service >/dev/null 2>&1 || true
+fi
+
+exit 0

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Myna Layout
+Comment=Show Myna dictation status
+Icon=myna-layout
+Exec=systemctl --user start myna-layout.service
+Terminal=false
+Categories=Utility;AudioVideo;
