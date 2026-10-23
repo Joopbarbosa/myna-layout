@@ -20,6 +20,7 @@ ab_glyph = "0.2.32"
 async-channel = "2.5.0"
 futures-lite = "2.6.1"
 serde = { version = "1.0.229", features = ["derive"] }
+signal-hook = "0.4.5"
 smithay-client-toolkit = "0.21.1"
 tiny-skia = "0.12.0"
 toml = "1.1.8"

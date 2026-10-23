@@ -36,6 +36,7 @@ enum Request {
     Notice(String),
     Close,
     CloseNotice(u32),
+    Flush(std::sync::mpsc::Sender<()>),
 }
 
 /// Asynchronous adapter for `org.freedesktop.Notifications`.
@@ -101,6 +102,12 @@ impl Notifier for DbusNotifier {
     fn close(&mut self) {
         self.send(Request::Close);
     }
+
+    fn flush(&mut self, timeout: Duration) {
+        let (done, wait) = std::sync::mpsc::channel();
+        self.send(Request::Flush(done));
+        let _ = wait.recv_timeout(timeout);
+    }
 }
 
 async fn worker(
@@ -163,6 +170,9 @@ async fn worker(
                     }
                     current_id = 0;
                 }
+            }
+            Request::Flush(done) => {
+                let _ = done.send(());
             }
             Request::CloseNotice(id) => {
                 if let Err(error) = close_id(&connection, id).await {

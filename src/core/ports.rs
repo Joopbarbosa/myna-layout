@@ -5,6 +5,8 @@
 //! `SurfaceReady` or `SurfaceFailed`, and later failures arrive as `SurfaceFailed`,
 //! never as a return value (DT-NOVA-2).
 
+use std::time::Duration;
+
 use super::{BarLook, Message, OneTimeNotice, Urgency};
 
 /// The system notification surface.
@@ -19,6 +21,9 @@ pub trait Notifier: Send {
     fn notice_once(&mut self, notice: OneTimeNotice);
     /// Close the notification of the indicator, if any.
     fn close(&mut self);
+    /// Block until every pending request has been carried out, for at most `timeout`
+    /// (used at shutdown so the last close is not lost).
+    fn flush(&mut self, timeout: Duration);
 }
 
 /// The floating bar.
@@ -42,6 +47,9 @@ pub trait MynaClient: Send {
     fn unregister(&mut self);
     /// The version of Myna being observed, for the log.
     fn version(&self) -> Option<String>;
+    /// Block until every pending request has been carried out, for at most `timeout`
+    /// (used at shutdown so the unregistration is not lost).
+    fn flush(&mut self, timeout: Duration);
 }
 
 #[cfg(test)]

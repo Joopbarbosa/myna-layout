@@ -7,6 +7,7 @@
 //! - [`myna`]: the only module that talks to Myna's D-Bus interface.
 //! - [`surface`]: the two feedback surfaces, the floating bar and the notification.
 //! - [`config`]: reads and validates the user configuration file.
+//! - [`runtime`]: carries out the commands of the `core` on the real modules.
 //! - [`theme`]: colours, durations, curves and sizes used by the drawing code.
 //! - [`i18n`]: every text shown to the user.
 
@@ -14,5 +15,6 @@ pub mod config;
 pub mod core;
 pub mod i18n;
 pub mod myna;
+pub mod runtime;
 pub mod surface;
 pub mod theme;
