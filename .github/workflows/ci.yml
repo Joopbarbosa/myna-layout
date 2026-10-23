@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    name: Format, lint, and test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install D-Bus
+        run: sudo apt-get update && sudo apt-get install --yes dbus
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Run tests
+        run: cargo test
+
+  release:
+    name: Build and publish Debian package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+      - name: Build Debian package
+        run: cargo deb
+      - name: Create SHA-256 checksum
+        run: |
+          package=$(find target/debian -maxdepth 1 -type f -name 'myna-layout_*_amd64.deb' -print -quit)
+          test -n "$package"
+          sha256sum "$package" > "$package.sha256"
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2.0.8
+        with:
+          files: target/debian/myna-layout_*_amd64.deb*
