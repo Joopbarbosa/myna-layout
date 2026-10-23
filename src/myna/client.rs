@@ -29,6 +29,7 @@ impl std::error::Error for MynaError {}
 enum Request {
     Register,
     Unregister,
+    Flush(std::sync::mpsc::Sender<()>),
 }
 
 /// The client of Myna's D-Bus interface.
@@ -82,6 +83,13 @@ impl MynaClient for DbusMynaClient {
     fn version(&self) -> Option<String> {
         self.version.clone()
     }
+
+    fn flush(&mut self, timeout: std::time::Duration) {
+        let (done, wait) = std::sync::mpsc::channel();
+        if self.requests.try_send(Request::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(timeout);
+        }
+    }
 }
 
 /// What the worker waits for.
@@ -134,6 +142,9 @@ async fn watch(
                 sink(Event::MynaAbsent);
             }
             Input::Owner(None) => {}
+            Input::Request(Some(Request::Flush(done))) => {
+                let _ = done.send(());
+            }
             Input::Request(Some(request)) => call_registration(&connection, request).await,
             Input::Request(None) => return Ok(()),
             Input::Changed(Some(changes)) => {
@@ -228,6 +239,7 @@ async fn call_registration(connection: &Connection, request: Request) {
     let method = match request {
         Request::Register => "RegisterClient",
         Request::Unregister => "UnregisterClient",
+        Request::Flush(_) => return,
     };
     let result = async {
         let proxy = zbus::Proxy::new(connection, BUS_NAME, OBJECT_PATH, INTERFACE).await?;
