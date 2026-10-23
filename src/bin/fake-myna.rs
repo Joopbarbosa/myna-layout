@@ -271,11 +271,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     block_on(run())
 }
 async fn run() -> Result<(), Box<dyn Error>> {
-    let address = env::args()
-        .skip_while(|arg| arg != "--bus-address")
-        .nth(1)
-        .or_else(|| env::var("FAKE_MYNA_BUS_ADDRESS").ok())
-        .ok_or("private bus address required via --bus-address or FAKE_MYNA_BUS_ADDRESS")?;
+    let address = env::var("FAKE_MYNA_BUS_ADDRESS")
+        .map_err(|_| "private bus address required via FAKE_MYNA_BUS_ADDRESS")?;
     if env::var("DBUS_SESSION_BUS_ADDRESS").ok().as_deref() == Some(address.as_str()) {
         return Err("refusing the inherited session bus; provide a private test bus".into());
     }

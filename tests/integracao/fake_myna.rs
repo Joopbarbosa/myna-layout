@@ -76,7 +76,7 @@ impl FakeMyna {
             return Err(format!("dbus-daemon failed to start private bus: {stderr}").into());
         }
         let service = Command::new(env!("CARGO_BIN_EXE_fake-myna"))
-            .args(["--bus-address", &address])
+            .env("FAKE_MYNA_BUS_ADDRESS", &address)
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
