@@ -27,7 +27,7 @@ use smithay_client_toolkit::reexports::{
         channel::{self, Channel},
         generic::Generic,
     },
-    client::{Connection, EventQueue},
+    client::{Connection, EventQueue, backend::WaylandError},
 };
 
 /// How long shutdown waits for the unregistration and the last close.
@@ -84,7 +84,13 @@ impl App {
         let result = (|| {
             queue.dispatch_pending(bar)?;
             if let Some(guard) = connection.prepare_read() {
-                guard.read()?;
+                match guard.read() {
+                    // Nothing to read yet: the socket woke us spuriously.
+                    Err(WaylandError::Io(io)) if io.kind() == std::io::ErrorKind::WouldBlock => {}
+                    other => {
+                        other?;
+                    }
+                }
             }
             queue.dispatch_pending(bar)?;
             Ok::<_, Box<dyn std::error::Error>>(())
